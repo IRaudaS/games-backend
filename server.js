@@ -274,9 +274,12 @@ app.get('/api/rummy/games/:gameId', async (req, res) => {
 });
 
 // Health check
-app.get('/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-});
+//app.get('/health', (req, res) => {
+//  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+//});
+app.get('/api/rummy/health', (req, res) => {
+    res.json({ status: 'OK', game: 'Rummy', timestamp: new Date().toISOString() });
+  });
 
 // Socket.IO para tiempo real
 io.on('connection', (socket) => {
