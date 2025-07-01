@@ -584,4 +584,22 @@ async function startServer() {
   });
 }
 
+// Ruta principal
+app.get('/', (req, res) => {
+    res.send(`
+      <h1>🎮 Family Games Backend</h1>
+      <p>Backend unificado para juegos familiares</p>
+      <ul>
+        <li><a href="/api/rummy/health">🃏 Rummy Health Check</a></li>
+        <li><a href="/api/wheel/health">🎡 Wheel Fortune Health Check</a></li>
+        <li><a href="/health">📊 General Health Check</a></li>
+      </ul>
+      <p><strong>URLs importantes:</strong></p>
+      <ul>
+        <li>Rummy API: <code>/api/rummy/*</code></li>
+        <li>Wheel Fortune API: <code>/api/wheel/*</code></li>
+      </ul>
+    `);
+  });
+
 startServer().catch(console.error);
