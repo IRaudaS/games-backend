@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 8080;
 // Configuración de PostgreSQL (Cloud SQL)
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://username:password@localhost/rummy_db',
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+  ssl: false 
 });
 
 // Middleware
@@ -791,6 +791,7 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
       currentPlayer: row.current_player,
       playerMoney: row.player_money ? JSON.parse(row.player_money) : {},
       gameStatus: row.game_status,
+      roundNumber: row.round_number || 1,
       consonantsUsed: row.consonants_used ? JSON.parse(row.consonants_used) : [],
       vowelsUsed: row.vowels_used ? JSON.parse(row.vowels_used) : []
     };
