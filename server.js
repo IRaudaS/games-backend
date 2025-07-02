@@ -722,19 +722,14 @@ app.get('/api/wheel/games/:gameId', async (req, res) => {
       id: gameData.id,
       phrase: gameData.phrase,
       category: gameData.category,
-      //revealedLetters: JSON.parse(gameData.revealed_letters),
-      //currentPlayer: gameData.current_player,
-      //playerMoney: JSON.parse(gameData.player_money),
       revealedLetters: gameData.revealed_letters ? JSON.parse(gameData.revealed_letters) : [],
       currentPlayer: gameData.current_player,
       playerMoney: gameData.player_money ? JSON.parse(gameData.player_money) : {},
+      gameStatus: gameData.game_status,
+      roundNumber: gameData.round_number || 1,
       consonantsUsed: gameData.consonants_used ? JSON.parse(gameData.consonants_used) : [],
       vowelsUsed: gameData.vowels_used ? JSON.parse(gameData.vowels_used) : [],
-      gameStatus: gameData.game_status,
-      roundNumber: gameData.round_number,
-      consonantsUsed: JSON.parse(gameData.consonants_used),
-      vowelsUsed: JSON.parse(gameData.vowels_used),
-      displayPhrase: revealLetters(gameData.phrase, JSON.parse(gameData.revealed_letters))
+      displayPhrase: revealLetters(gameData.phrase, gameData.revealed_letters ? JSON.parse(gameData.revealed_letters) : [])
     };
     
     res.json(game);
