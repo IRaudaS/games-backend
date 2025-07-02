@@ -524,7 +524,7 @@ if (process.env.NODE_ENV === 'production') {
 // =================== WHEEL FORTUNE GAME LOGIC ===================
 
 // Jugadores fijos para wheel-fortune
-const FIXED_PLAYERS = ['Peepo', 'Nachito', 'Fer'];
+const FIXED_PLAYERS_WHEEL = ['Peepo', 'Nachito', 'Fer'];
 
 // Valores de la ruleta
 const WHEEL_VALUES = [
@@ -537,6 +537,132 @@ const WHEEL_VALUES = [
 const wheelGames = new Map();
 const wheelPlayerSockets = new Map();
 const wheelConnectedPlayers = new Map();
+
+// Funciones auxiliares del wheel fortune
+function spinWheel() {
+  return WHEEL_VALUES[Math.floor(Math.random() * WHEEL_VALUES.length)];
+}
+
+function checkLetter(phrase, letter) {
+  letter = letter.toUpperCase();
+  const count = (phrase.match(new RegExp(letter, 'g')) || []).length;
+  return {
+    found: count > 0,
+    count: count,
+    letter: letter
+  };
+}
+
+function revealLetters(phrase, revealedLetters) {
+  return phrase.split('').map(char => {
+    if (char === ' ') return '   ';
+    if (revealedLetters.includes(char.toUpperCase())) return char;
+    return '_';
+  }).join(' ');
+}
+
+function isPhraseComplete(phrase, revealedLetters) {
+  const uniqueLetters = [...new Set(phrase.replace(/\s/g, '').split(''))];
+  return uniqueLetters.every(letter => revealedLetters.includes(letter.toUpperCase()));
+}
+
+function getNextPlayerWheel(currentPlayer) {
+  const currentIndex = FIXED_PLAYERS_WHEEL.indexOf(currentPlayer);
+  return FIXED_PLAYERS_WHEEL[(currentIndex + 1) % FIXED_PLAYERS_WHEEL.length];
+}
+
+async function saveWheelGameState(game) {
+  await pool.query(
+    `UPDATE wheel_games 
+     SET revealed_letters = $1, current_player = $2, player_money = $3, 
+         game_status = $4, consonants_used = $5, vowels_used = $6, last_activity = CURRENT_TIMESTAMP
+     WHERE id = $7`,
+    [
+      JSON.stringify(game.revealedLetters),
+      game.currentPlayer,
+      JSON.stringify(game.playerMoney),
+      game.gameStatus,
+      JSON.stringify(game.consonantsUsed),
+      JSON.stringify(game.vowelsUsed),
+      game.id
+    ]
+  );
+}
+
+// Banco de frases
+const WHEEL_PHRASES = {
+  'PELICULAS MARVEL': [
+    'IRON MAN TONY STARK GENIUS',
+    'SPIDER MAN PETER PARKER',
+    'THOR HAMMER MJOLNIR ASGARD',
+    'CAPTAIN AMERICA STEVE ROGERS',
+    'AVENGERS ENDGAME THANOS'
+  ],
+  'BASKETBALL NBA': [
+    'LEBRON JAMES GOAT DEBATE',
+    'STEPHEN CURRY THREE POINTER',
+    'MICHAEL JORDAN BULLS',
+    'KOBE BRYANT MAMBA MENTALITY',
+    'NBA PLAYOFFS CHAMPIONSHIP'
+  ],
+  'GENERAL': [
+    'NINTENDO SWITCH MARIO',
+    'POKEMON PIKACHU TRAINER',
+    'MINECRAFT STEVE CREEPER',
+    'FORTNITE BATTLE ROYALE',
+    'AMONG US IMPOSTOR'
+  ]
+};
+
+async function getRandomPhraseWheel(category = null) {
+  const categories = Object.keys(WHEEL_PHRASES);
+  const selectedCategory = category || categories[Math.floor(Math.random() * categories.length)];
+  
+  const phrases = WHEEL_PHRASES[selectedCategory] || WHEEL_PHRASES['GENERAL'];
+  const phrase = phrases[Math.floor(Math.random() * phrases.length)];
+  
+  return {
+    phrase: phrase.toUpperCase(),
+    category: selectedCategory
+  };
+}
+
+// Inicializar tablas wheel fortune
+async function initWheelDatabase() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wheel_games (
+        id VARCHAR(20) PRIMARY KEY,
+        phrase VARCHAR(200),
+        category VARCHAR(50),
+        revealed_letters JSONB DEFAULT '[]',
+        current_player VARCHAR(50),
+        player_money JSONB DEFAULT '{}',
+        game_status VARCHAR(20) DEFAULT 'playing',
+        round_number INTEGER DEFAULT 1,
+        consonants_used JSONB DEFAULT '[]',
+        vowels_used JSONB DEFAULT '[]',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS wheel_moves (
+        id SERIAL PRIMARY KEY,
+        game_id VARCHAR(20) REFERENCES wheel_games(id),
+        player VARCHAR(50),
+        move_type VARCHAR(30),
+        move_data JSONB,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    console.log('✅ Tablas Wheel Fortune inicializadas');
+  } catch (error) {
+    console.error('❌ Error inicializando tablas Wheel:', error);
+  }
+}
 
 // =================== WHEEL FORTUNE ROUTES ===================
 
@@ -551,15 +677,280 @@ app.post('/api/wheel/games', async (req, res) => {
     const { category } = req.body;
     const gameId = 'WHEEL-' + Math.random().toString(36).substr(2, 6).toUpperCase();
     
+    const { phrase, category: selectedCategory } = await getRandomPhraseWheel(category);
+    
+    const initialMoney = {};
+    FIXED_PLAYERS_WHEEL.forEach(player => {
+      initialMoney[player] = 0;
+    });
+    
+    // Guardar en base de datos
+    await pool.query(
+      `INSERT INTO wheel_games 
+       (id, phrase, category, revealed_letters, current_player, player_money, consonants_used, vowels_used) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [
+        gameId, phrase, selectedCategory, 
+        JSON.stringify([]), FIXED_PLAYERS_WHEEL[0], JSON.stringify(initialMoney),
+        JSON.stringify([]), JSON.stringify([])
+      ]
+    );
+    
     res.json({ 
       gameId,
-      message: `Juego Wheel Fortune creado: ${category || 'GENERAL'}`,
-      category: category || 'GENERAL',
-      players: FIXED_PLAYERS
+      message: `Juego creado: ${selectedCategory}`,
+      category: selectedCategory,
+      players: FIXED_PLAYERS_WHEEL
     });
   } catch (error) {
     console.error('Error creando juego wheel:', error);
     res.status(500).json({ error: 'Error creando juego' });
+  }
+});
+
+// Obtener estado del juego
+app.get('/api/wheel/games/:gameId', async (req, res) => {
+  try {
+    const { gameId } = req.params;
+    
+    const result = await pool.query(
+      'SELECT * FROM wheel_games WHERE id = $1',
+      [gameId]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Juego no encontrado' });
+    }
+    
+    const gameData = result.rows[0];
+    const game = {
+      id: gameData.id,
+      phrase: gameData.phrase,
+      category: gameData.category,
+      revealedLetters: JSON.parse(gameData.revealed_letters),
+      currentPlayer: gameData.current_player,
+      playerMoney: JSON.parse(gameData.player_money),
+      gameStatus: gameData.game_status,
+      roundNumber: gameData.round_number,
+      consonantsUsed: JSON.parse(gameData.consonants_used),
+      vowelsUsed: JSON.parse(gameData.vowels_used),
+      displayPhrase: revealLetters(gameData.phrase, JSON.parse(gameData.revealed_letters))
+    };
+    
+    res.json(game);
+  } catch (error) {
+    console.error('Error obteniendo juego wheel:', error);
+    res.status(500).json({ error: 'Error obteniendo juego' });
+  }
+});
+
+// Obtener juegos activos de un jugador
+app.get('/api/wheel/my-games/:player', async (req, res) => {
+  try {
+    const { player } = req.params;
+    
+    const result = await pool.query(
+      `SELECT id, category, current_player, player_money, game_status, last_activity
+       FROM wheel_games 
+       WHERE game_status = 'playing' 
+       AND (current_player = $1 OR player_money::text LIKE '%"' || $1 || '"%')
+       ORDER BY last_activity DESC`,
+      [player]
+    );
+    
+    const myGames = result.rows.map(row => ({
+      gameId: row.id,
+      category: row.category,
+      currentPlayer: row.current_player,
+      isMyTurn: row.current_player === player,
+      myMoney: JSON.parse(row.player_money)[player] || 0,
+      lastActivity: row.last_activity,
+      status: row.game_status
+    }));
+    
+    res.json({ games: myGames });
+  } catch (error) {
+    console.error('Error obteniendo juegos wheel:', error);
+    res.status(500).json({ error: 'Error obteniendo juegos' });
+  }
+});
+
+// Hacer jugada
+app.post('/api/wheel/games/:gameId/play', async (req, res) => {
+  try {
+    const { gameId } = req.params;
+    const { player, action, data } = req.body;
+    
+    // Cargar juego desde BD
+    const result = await pool.query('SELECT * FROM wheel_games WHERE id = $1', [gameId]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Juego no encontrado' });
+    }
+    
+    const row = result.rows[0];
+    const game = {
+      id: row.id,
+      phrase: row.phrase,
+      category: row.category,
+      revealedLetters: JSON.parse(row.revealed_letters),
+      currentPlayer: row.current_player,
+      playerMoney: JSON.parse(row.player_money),
+      gameStatus: row.game_status,
+      roundNumber: row.round_number,
+      consonantsUsed: JSON.parse(row.consonants_used),
+      vowelsUsed: JSON.parse(row.vowels_used)
+    };
+    
+    if (game.currentPlayer !== player) {
+      return res.status(400).json({ error: 'No es tu turno' });
+    }
+    
+    let gameResult = { success: false, message: '' };
+    
+    switch (action) {
+      case 'spin':
+        const spinResult = spinWheel();
+        gameResult = {
+          success: true,
+          message: `${player} giró: ${spinResult}`,
+          wheelValue: spinResult,
+          nextAction: typeof spinResult === 'number' ? 'guess_consonant' : 'lose_turn'
+        };
+        break;
+        
+      case 'guess_consonant':
+        const { letter, wheelValue } = data;
+        
+        if (typeof wheelValue !== 'number') {
+          if (wheelValue === 'BANCARROTA') {
+            game.playerMoney[player] = 0;
+            game.currentPlayer = getNextPlayerWheel(player);
+            gameResult = { success: true, message: `${player} perdió todo - BANCARROTA!` };
+          } else if (wheelValue === 'PIERDE_TURNO') {
+            game.currentPlayer = getNextPlayerWheel(player);
+            gameResult = { success: true, message: `${player} pierde el turno` };
+          }
+        } else {
+          if (game.consonantsUsed.includes(letter.toUpperCase())) {
+            gameResult = { success: false, message: 'Esa consonante ya fue usada' };
+          } else {
+            const letterCheck = checkLetter(game.phrase, letter);
+            game.consonantsUsed.push(letter.toUpperCase());
+            
+            if (letterCheck.found) {
+              game.revealedLetters.push(letter.toUpperCase());
+              const earnings = wheelValue * letterCheck.count;
+              game.playerMoney[player] += earnings;
+              
+              if (isPhraseComplete(game.phrase, game.revealedLetters)) {
+                game.gameStatus = 'completed';
+                gameResult = { 
+                  success: true, 
+                  message: `¡${player} completó la frase y ganó $${game.playerMoney[player]}!`,
+                  gameComplete: true
+                };
+              } else {
+                gameResult = { 
+                  success: true, 
+                  message: `¡Correcto! ${letterCheck.count} letra(s) '${letter}' - $${earnings}`
+                };
+              }
+            } else {
+              game.currentPlayer = getNextPlayerWheel(player);
+              gameResult = { 
+                success: true, 
+                message: `No hay letra '${letter}' - turno de ${game.currentPlayer}` 
+              };
+            }
+          }
+        }
+        break;
+        
+      case 'buy_vowel':
+        const vowel = data.letter;
+        
+        if (game.playerMoney[player] < 250) {
+          gameResult = { success: false, message: 'No tienes suficiente dinero para comprar una vocal ($250)' };
+        } else if (game.vowelsUsed.includes(vowel.toUpperCase())) {
+          gameResult = { success: false, message: 'Esa vocal ya fue comprada' };
+        } else {
+          game.vowelsUsed.push(vowel.toUpperCase());
+          game.playerMoney[player] -= 250;
+          
+          const letterCheck = checkLetter(game.phrase, vowel);
+          if (letterCheck.found) {
+            game.revealedLetters.push(vowel.toUpperCase());
+            
+            if (isPhraseComplete(game.phrase, game.revealedLetters)) {
+              game.gameStatus = 'completed';
+              gameResult = { 
+                success: true, 
+                message: `¡${player} completó la frase con '${vowel}' y ganó $${game.playerMoney[player]}!`,
+                gameComplete: true
+              };
+            } else {
+              gameResult = { 
+                success: true, 
+                message: `¡Correcto! ${letterCheck.count} vocal(es) '${vowel}' por $250`
+              };
+            }
+          } else {
+            game.currentPlayer = getNextPlayerWheel(player);
+            gameResult = { 
+              success: true, 
+              message: `No hay vocal '${vowel}' - turno de ${game.currentPlayer}` 
+            };
+          }
+        }
+        break;
+        
+      case 'solve_phrase':
+        const solution = data.solution;
+        const normalizedSolution = solution.toUpperCase().replace(/\s+/g, ' ').trim();
+        const normalizedPhrase = game.phrase.replace(/\s+/g, ' ').trim();
+        
+        if (normalizedSolution === normalizedPhrase) {
+          game.gameStatus = 'completed';
+          game.revealedLetters = [...new Set(game.phrase.replace(/\s/g, '').split(''))];
+          gameResult = {
+            success: true,
+            message: `¡${player} resolvió la frase y ganó $${game.playerMoney[player]}!`,
+            gameComplete: true
+          };
+        } else {
+          game.currentPlayer = getNextPlayerWheel(player);
+          gameResult = {
+            success: true,
+            message: `Solución incorrecta - turno de ${game.currentPlayer}`
+          };
+        }
+        break;
+        
+      default:
+        return res.status(400).json({ error: 'Acción inválida' });
+    }
+    
+    if (gameResult.success) {
+      // Guardar en BD
+      await saveWheelGameState(game);
+      
+      // Guardar jugada
+      await pool.query(
+        'INSERT INTO wheel_moves (game_id, player, move_type, move_data) VALUES ($1, $2, $3, $4)',
+        [gameId, player, action, JSON.stringify(data)]
+      );
+    }
+    
+    res.json({
+      ...gameResult,
+      game: {
+        ...game,
+        displayPhrase: revealLetters(game.phrase, game.revealedLetters)
+      }
+    });
+  } catch (error) {
+    console.error('Error en jugada wheel:', error);
+    res.status(500).json({ error: 'Error procesando jugada' });
   }
 });
 
@@ -573,16 +964,6 @@ app.get('/health', (req, res) => {
     timestamp: new Date().toISOString() 
   });
 });
-
-// Inicializar servidor
-async function startServer() {
-  await initDatabase();
-  
-  server.listen(PORT, () => {
-    console.log(`🚀 Family games backend funcionando en puerto ${PORT}`);
-    console.log(`🎮 Rummy y Wheel of fortune listos`);
-  });
-}
 
 // Ruta principal
 app.get('/', (req, res) => {
@@ -601,5 +982,16 @@ app.get('/', (req, res) => {
       </ul>
     `);
   });
+
+// Inicializar servidor
+async function startServer() {
+  await initDatabase();
+  await initWheelDatabase(); // ✅ Agregar esta línea
+  
+  server.listen(PORT, () => {
+    console.log(`🚀 Family games backend funcionando en puerto ${PORT}`);
+    console.log(`🎮 Rummy y Wheel of fortune listos`);
+  });
+}
 
 startServer().catch(console.error);
