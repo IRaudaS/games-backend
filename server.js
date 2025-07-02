@@ -260,31 +260,35 @@ app.post('/api/rummy/games/:gameId/join', async (req, res) => {
 app.get('/api/wheel/games/:gameId', async (req, res) => {
   try {
     const { gameId } = req.params;
-    console.log('🔍 Buscando juego:', gameId);
     
     const result = await pool.query(
       'SELECT * FROM wheel_games WHERE id = $1',
       [gameId]
     );
     
-    console.log('📊 Filas encontradas:', result.rows.length);
-    
     if (result.rows.length === 0) {
-      console.log('❌ No se encontró el juego');
       return res.status(404).json({ error: 'Juego no encontrado' });
     }
     
     const gameData = result.rows[0];
-    console.log('📋 Datos del juego:', JSON.stringify(gameData, null, 2));
     
-    res.json({ 
+    const game = {
       id: gameData.id,
       phrase: gameData.phrase,
       category: gameData.category,
-      message: 'Debug successful'
-    });
+      revealedLetters: gameData.revealed_letters ? JSON.parse(gameData.revealed_letters) : [],
+      currentPlayer: gameData.current_player,
+      playerMoney: gameData.player_money ? JSON.parse(gameData.player_money) : {},
+      gameStatus: gameData.game_status,
+      roundNumber: gameData.round_number || 1,
+      consonantsUsed: gameData.consonants_used ? JSON.parse(gameData.consonants_used) : [],
+      vowelsUsed: gameData.vowels_used ? JSON.parse(gameData.vowels_used) : [],
+      displayPhrase: revealLetters(gameData.phrase, gameData.revealed_letters ? JSON.parse(gameData.revealed_letters) : [])
+    };
+    
+    res.json(game);
   } catch (error) {
-    console.error('❌ Error completo:', error);
+    console.error('Error obteniendo juego wheel:', error);
     res.status(500).json({ error: 'Error obteniendo juego' });
   }
 });
