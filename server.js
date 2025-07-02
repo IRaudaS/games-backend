@@ -729,7 +729,7 @@ app.get('/api/wheel/games/:gameId', async (req, res) => {
       roundNumber: gameData.round_number || 1,
       consonantsUsed: gameData.consonants_used ? JSON.parse(gameData.consonants_used) : [],
       vowelsUsed: gameData.vowels_used ? JSON.parse(gameData.vowels_used) : [],
-      displayPhrase: revealLetters(gameData.phrase, gameData.revealed_letters ? JSON.parse(gameData.revealed_letters) : [])
+      displayPhrase: revealLetters(gameData.phrase, revealed_letters)
     };
     
     res.json(game);
