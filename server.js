@@ -514,12 +514,7 @@ async function handleGameEnd(game, winner) {
   );
 }
 
-// Servir frontend en producción
-if (process.env.NODE_ENV === 'production') {
-  app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
-  });
-}
+
 
 // =================== WHEEL FORTUNE GAME LOGIC ===================
 
@@ -983,7 +978,13 @@ app.get('/', (req, res) => {
     `);
   });
 
-// Inicializar servidor
+// Servir frontend en producción
+if (process.env.NODE_ENV === 'production') {
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  });
+}
+  // Inicializar servidor
 async function startServer() {
   await initDatabase();
   await initWheelDatabase(); // ✅ Agregar esta línea
