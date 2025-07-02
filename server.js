@@ -758,7 +758,7 @@ app.get('/api/wheel/my-games/:player', async (req, res) => {
       category: row.category,
       currentPlayer: row.current_player,
       isMyTurn: row.current_player === player,
-      myMoney: JSON.parse(row.player_money)[player] || 0,
+      myMoney: (row.player_money ? JSON.parse(row.player_money)[player] : 0) || 0,
       lastActivity: row.last_activity,
       status: row.game_status
     }));
@@ -787,13 +787,12 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
       id: row.id,
       phrase: row.phrase,
       category: row.category,
-      revealedLetters: JSON.parse(row.revealed_letters),
+      revealedLetters: row.revealed_letters ? JSON.parse(row.revealed_letters) : [],
       currentPlayer: row.current_player,
-      playerMoney: JSON.parse(row.player_money),
+      playerMoney: row.player_money ? JSON.parse(row.player_money) : {},
       gameStatus: row.game_status,
-      roundNumber: row.round_number,
-      consonantsUsed: JSON.parse(row.consonants_used),
-      vowelsUsed: JSON.parse(row.vowels_used)
+      consonantsUsed: row.consonants_used ? JSON.parse(row.consonants_used) : [],
+      vowelsUsed: row.vowels_used ? JSON.parse(row.vowels_used) : []
     };
     
     if (game.currentPlayer !== player) {
