@@ -256,53 +256,10 @@ app.post('/api/rummy/games/:gameId/join', async (req, res) => {
   }
 });
 
-// Obtener estado del juego
-app.get('/api/wheel/games/:gameId', async (req, res) => {
-  try {
-    const { gameId } = req.params;
-    
-    const result = await pool.query(
-      'SELECT * FROM wheel_games WHERE id = $1',
-      [gameId]
-    );
-    
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Juego no encontrado' });
-    }
-    
-    const gameData = result.rows[0];
-    
-    // Parsear los datos JSON de la base de datos
-    const revealedLetters = gameData.revealed_letters ? JSON.parse(gameData.revealed_letters) : [];
-    
-    const game = {
-      id: gameData.id,
-      phrase: gameData.phrase,
-      category: gameData.category,
-      revealedLetters: revealedLetters,
-      currentPlayer: gameData.current_player,
-      playerMoney: gameData.player_money ? JSON.parse(gameData.player_money) : {},
-      gameStatus: gameData.game_status,
-      roundNumber: gameData.round_number || 1,
-      consonantsUsed: gameData.consonants_used ? JSON.parse(gameData.consonants_used) : [],
-      vowelsUsed: gameData.vowels_used ? JSON.parse(gameData.vowels_used) : [],
-      displayPhrase: revealLetters(gameData.phrase, revealedLetters) // ✅ CORREGIDO
-    };
-    
-    res.json(game);
-  } catch (error) {
-    console.error('Error obteniendo juego wheel:', error);
-    res.status(500).json({ error: 'Error obteniendo juego' });
-  }
-});
-
 // Health check
-//app.get('/health', (req, res) => {
-//  res.json({ status: 'OK', timestamp: new Date().toISOString() });
-//});
 app.get('/api/rummy/health', (req, res) => {
     res.json({ status: 'OK', game: 'Rummy', timestamp: new Date().toISOString() });
-  });
+});
 
 // Socket.IO para tiempo real
 io.on('connection', (socket) => {
@@ -537,8 +494,6 @@ async function handleGameEnd(game, winner) {
   );
 }
 
-
-
 // =================== WHEEL FORTUNE GAME LOGIC ===================
 
 // Jugadores fijos para wheel-fortune
@@ -555,6 +510,18 @@ const WHEEL_VALUES = [
 const wheelGames = new Map();
 const wheelPlayerSockets = new Map();
 const wheelConnectedPlayers = new Map();
+
+// Función auxiliar para parsear JSON de manera segura
+function safeJsonParse(data, defaultValue = null) {
+  if (!data) return defaultValue;
+  if (typeof data === 'object') return data; // Ya es un objeto
+  try {
+    return JSON.parse(data);
+  } catch (e) {
+    console.error('Error parseando JSON:', e);
+    return defaultValue;
+  }
+}
 
 // Funciones auxiliares del wheel fortune
 function spinWheel() {
@@ -691,11 +658,13 @@ app.get('/api/wheel/health', (req, res) => {
 
 // Crear nuevo juego wheel
 app.post('/api/wheel/games', async (req, res) => {
+  console.log('POST /api/wheel/games - body:', req.body);
   try {
     const { category } = req.body;
     const gameId = 'WHEEL-' + Math.random().toString(36).substr(2, 6).toUpperCase();
     
     const { phrase, category: selectedCategory } = await getRandomPhraseWheel(category);
+    console.log('Juego creado:', { gameId, phrase, selectedCategory });
     
     const initialMoney = {};
     FIXED_PLAYERS_WHEEL.forEach(player => {
@@ -714,22 +683,26 @@ app.post('/api/wheel/games', async (req, res) => {
       ]
     );
     
-    res.json({ 
+    const response = { 
       gameId,
       message: `Juego creado: ${selectedCategory}`,
       category: selectedCategory,
       players: FIXED_PLAYERS_WHEEL
-    });
+    };
+    
+    console.log('Enviando respuesta:', response);
+    res.json(response);
   } catch (error) {
     console.error('Error creando juego wheel:', error);
-    res.status(500).json({ error: 'Error creando juego' });
+    res.status(500).json({ error: 'Error creando juego', details: error.message });
   }
 });
 
-// Obtener estado del juego
+// Obtener estado del juego - CORREGIDO
 app.get('/api/wheel/games/:gameId', async (req, res) => {
   try {
     const { gameId } = req.params;
+    console.log('GET /api/wheel/games/:gameId - gameId:', gameId);
     
     const result = await pool.query(
       'SELECT * FROM wheel_games WHERE id = $1',
@@ -741,31 +714,41 @@ app.get('/api/wheel/games/:gameId', async (req, res) => {
     }
     
     const gameData = result.rows[0];
+    console.log('Tipo de revealed_letters:', typeof gameData.revealed_letters);
+    console.log('Tipo de player_money:', typeof gameData.player_money);
+    
+    // Usar la función segura para parsear JSONs
+    const revealedLetters = safeJsonParse(gameData.revealed_letters, []);
+    const playerMoney = safeJsonParse(gameData.player_money, {});
+    const consonantsUsed = safeJsonParse(gameData.consonants_used, []);
+    const vowelsUsed = safeJsonParse(gameData.vowels_used, []);
+    
     const game = {
       id: gameData.id,
       phrase: gameData.phrase,
       category: gameData.category,
-      revealedLetters: gameData.revealed_letters ? JSON.parse(gameData.revealed_letters) : [],
+      revealedLetters: revealedLetters,
       currentPlayer: gameData.current_player,
-      playerMoney: gameData.player_money ? JSON.parse(gameData.player_money) : {},
+      playerMoney: playerMoney,
       gameStatus: gameData.game_status,
       roundNumber: gameData.round_number || 1,
-      consonantsUsed: gameData.consonants_used ? JSON.parse(gameData.consonants_used) : [],
-      vowelsUsed: gameData.vowels_used ? JSON.parse(gameData.vowels_used) : [],
-      displayPhrase: revealLetters(gameData.phrase, revealed_letters)
+      consonantsUsed: consonantsUsed,
+      vowelsUsed: vowelsUsed,
+      displayPhrase: revealLetters(gameData.phrase, revealedLetters)
     };
     
     res.json(game);
   } catch (error) {
     console.error('Error obteniendo juego wheel:', error);
-    res.status(500).json({ error: 'Error obteniendo juego' });
+    res.status(500).json({ error: 'Error obteniendo juego', details: error.message });
   }
 });
 
-// Obtener juegos activos de un jugador
+// Obtener juegos activos de un jugador - CORREGIDO
 app.get('/api/wheel/my-games/:player', async (req, res) => {
   try {
     const { player } = req.params;
+    console.log('GET /api/wheel/my-games/:player - player:', player);
     
     const result = await pool.query(
       `SELECT id, category, current_player, player_money, game_status, last_activity
@@ -776,24 +759,31 @@ app.get('/api/wheel/my-games/:player', async (req, res) => {
       [player]
     );
     
-    const myGames = result.rows.map(row => ({
-      gameId: row.id,
-      category: row.category,
-      currentPlayer: row.current_player,
-      isMyTurn: row.current_player === player,
-      myMoney: (row.player_money ? JSON.parse(row.player_money)[player] : 0) || 0,
-      lastActivity: row.last_activity,
-      status: row.game_status
-    }));
+    console.log('Juegos encontrados para', player, ':', result.rows.length);
+    
+    const myGames = result.rows.map(row => {
+      // Usar la función segura para parsear player_money
+      const playerMoneyObj = safeJsonParse(row.player_money, {});
+      
+      return {
+        gameId: row.id,
+        category: row.category,
+        currentPlayer: row.current_player,
+        isMyTurn: row.current_player === player,
+        myMoney: playerMoneyObj[player] || 0,
+        lastActivity: row.last_activity,
+        status: row.game_status
+      };
+    });
     
     res.json({ games: myGames });
   } catch (error) {
     console.error('Error obteniendo juegos wheel:', error);
-    res.status(500).json({ error: 'Error obteniendo juegos' });
+    res.status(500).json({ error: 'Error obteniendo juegos', details: error.message });
   }
 });
 
-// Hacer jugada
+// Hacer jugada - TAMBIÉN ACTUALIZADO
 app.post('/api/wheel/games/:gameId/play', async (req, res) => {
   try {
     const { gameId } = req.params;
@@ -806,17 +796,19 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
     }
     
     const row = result.rows[0];
+    
+    // Usar la función segura para todos los campos JSON
     const game = {
       id: row.id,
       phrase: row.phrase,
       category: row.category,
-      revealedLetters: row.revealed_letters ? JSON.parse(row.revealed_letters) : [],
+      revealedLetters: safeJsonParse(row.revealed_letters, []),
       currentPlayer: row.current_player,
-      playerMoney: row.player_money ? JSON.parse(row.player_money) : {},
+      playerMoney: safeJsonParse(row.player_money, {}),
       gameStatus: row.game_status,
       roundNumber: row.round_number || 1,
-      consonantsUsed: row.consonants_used ? JSON.parse(row.consonants_used) : [],
-      vowelsUsed: row.vowels_used ? JSON.parse(row.vowels_used) : []
+      consonantsUsed: safeJsonParse(row.consonants_used, []),
+      vowelsUsed: safeJsonParse(row.vowels_used, [])
     };
     
     if (game.currentPlayer !== player) {
@@ -864,13 +856,13 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
                 game.gameStatus = 'completed';
                 gameResult = { 
                   success: true, 
-                  message: `¡${player} completó la frase y ganó $${game.playerMoney[player]}!`,
+                  message: `¡${player} completó la frase y ganó ${game.playerMoney[player]}!`,
                   gameComplete: true
                 };
               } else {
                 gameResult = { 
                   success: true, 
-                  message: `¡Correcto! ${letterCheck.count} letra(s) '${letter}' - $${earnings}`
+                  message: `¡Correcto! ${letterCheck.count} letra(s) '${letter}' - ${earnings}`
                 };
               }
             } else {
@@ -903,7 +895,7 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
               game.gameStatus = 'completed';
               gameResult = { 
                 success: true, 
-                message: `¡${player} completó la frase con '${vowel}' y ganó $${game.playerMoney[player]}!`,
+                message: `¡${player} completó la frase con '${vowel}' y ganó ${game.playerMoney[player]}!`,
                 gameComplete: true
               };
             } else {
@@ -932,7 +924,7 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
           game.revealedLetters = [...new Set(game.phrase.replace(/\s/g, '').split(''))];
           gameResult = {
             success: true,
-            message: `¡${player} resolvió la frase y ganó $${game.playerMoney[player]}!`,
+            message: `¡${player} resolvió la frase y ganó ${game.playerMoney[player]}!`,
             gameComplete: true
           };
         } else {
@@ -968,7 +960,7 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
     });
   } catch (error) {
     console.error('Error en jugada wheel:', error);
-    res.status(500).json({ error: 'Error procesando jugada' });
+    res.status(500).json({ error: 'Error procesando jugada', details: error.message });
   }
 });
 
@@ -1007,10 +999,11 @@ if (process.env.NODE_ENV === 'production') {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
   });
 }
-  // Inicializar servidor
+
+// Inicializar servidor
 async function startServer() {
   await initDatabase();
-  await initWheelDatabase(); // ✅ Agregar esta línea
+  await initWheelDatabase();
   
   server.listen(PORT, () => {
     console.log(`🚀 Family games backend funcionando en puerto ${PORT}`);
