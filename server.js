@@ -5,6 +5,8 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const { Pool } = require('pg');
 const path = require('path');
+// --> NUEVO: Importamos la librería de Google Generative AI
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const server = http.createServer(app);
@@ -17,6 +19,12 @@ const io = socketIo(server, {
 
 // Configuración
 const PORT = process.env.PORT || 8080;
+
+// --> NUEVO: Inicializamos el cliente de Gemini
+const genAI = new GoogleGenerativeAI();
+// Usamos el modelo gemini-2.5-flash
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+
 
 // Configuración de PostgreSQL (Cloud SQL)
 const pool = new Pool({
@@ -599,18 +607,48 @@ const WHEEL_PHRASES = {
   ]
 };
 
+// --> NUEVO: Reemplazamos la función original con esta versión que llama a Gemini
 async function getRandomPhraseWheel(category = null) {
   const categories = Object.keys(WHEEL_PHRASES);
   const selectedCategory = category || categories[Math.floor(Math.random() * categories.length)];
-  
-  const phrases = WHEEL_PHRASES[selectedCategory] || WHEEL_PHRASES['GENERAL'];
-  const phrase = phrases[Math.floor(Math.random() * phrases.length)];
-  
-  return {
-    phrase: phrase.toUpperCase(),
-    category: selectedCategory
-  };
+
+  const prompt = `Genera una frase para el juego 'Rueda de la Fortuna' con la categoría "${selectedCategory}". La frase debe tener entre 20 y 30 caracteres en total, incluyendo espacios. No incluyas la categoría en la respuesta. Responde únicamente con la frase en mayúsculas.`;
+
+  console.log(`Generando frase con Gemini para la categoría: ${selectedCategory}`);
+
+  try {
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    let phrase = response.text().trim().toUpperCase().replace(/"/g, ''); // Limpiamos la respuesta
+
+    // Verificación de seguridad por si la IA da una respuesta extraña
+    if (phrase.length < 15 || phrase.length > 35) {
+        console.warn(`La frase generada por IA ('${phrase}') no cumple con la longitud. Usando una de respaldo.`);
+        // Si la frase es muy corta o larga, usa el respaldo
+        const backupPhrases = WHEEL_PHRASES[selectedCategory] || WHEEL_PHRASES['GENERAL'];
+        phrase = backupPhrases[Math.floor(Math.random() * backupPhrases.length)];
+    }
+
+    return {
+      phrase: phrase.toUpperCase(),
+      category: selectedCategory
+    };
+  } catch (error) {
+    // Si CUALQUIER cosa en el bloque "try" falla (la API no responde, no hay conexión, etc.)
+    // el código salta inmediatamente a esta sección "catch".
+    console.error("Error al llamar a la API de Gemini, usando frase de respaldo:", error);
+    
+    // Usa una frase del banco original que ya tienes
+    const backupPhrases = WHEEL_PHRASES[selectedCategory] || WHEEL_PHRASES['GENERAL'];
+    const phrase = backupPhrases[Math.floor(Math.random() * backupPhrases.length)];
+    
+    return {
+        phrase: phrase.toUpperCase(),
+        category: selectedCategory
+    };
+  }
 }
+
 
 // Inicializar tablas wheel fortune
 async function initWheelDatabase() {
@@ -917,7 +955,7 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
       case 'solve_phrase':
         const solution = data.solution;
         const normalizedSolution = solution.toUpperCase().replace(/\s+/g, ' ').trim();
-        const normalizedPhrase = game.phrase.replace(/\s+/g, ' ').trim();
+        const normalizedPhrase = game.phrase.replace(/\s/g, ' ').trim();
         
         if (normalizedSolution === normalizedPhrase) {
           game.gameStatus = 'completed';
