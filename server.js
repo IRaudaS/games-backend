@@ -5,8 +5,8 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const { Pool } = require('pg');
 const path = require('path');
-// --> NUEVO: Importamos la librería de Google Generative AI
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+// --> CAMBIO: Importamos la librería de Vertex AI en lugar de la anterior
+const { VertexAI } = require('@google-cloud/vertexai');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,10 +20,11 @@ const io = socketIo(server, {
 // Configuración
 const PORT = process.env.PORT || 8080;
 
-// --> NUEVO: Inicializamos el cliente de Gemini
-const genAI = new GoogleGenerativeAI();
-// Usamos el modelo gemini-2.5-flash
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+// --> CAMBIO: Inicializamos el cliente de Vertex AI con tu proyecto y región
+const vertex_ai = new VertexAI({project: 'rummy-464118', location: 'us-central1'});
+const model = vertex_ai.getGenerativeModel({
+    model: 'gemini-2.5-flash',
+});
 
 
 // Configuración de PostgreSQL (Cloud SQL)
@@ -50,7 +51,6 @@ function createTileSet() {
   const tiles = [];
   let id = 0;
   
-  // 2 sets de fichas numeradas (1-13 en 4 colores)
   for (let set = 0; set < 2; set++) {
     for (let color of COLORS) {
       for (let num = 1; num <= 13; num++) {
@@ -64,7 +64,6 @@ function createTileSet() {
     }
   }
   
-  // 2 comodines
   tiles.push({ id: id++, number: '★', color: 'joker', isJoker: true });
   tiles.push({ id: id++, number: '★', color: 'joker', isJoker: true });
   
@@ -98,7 +97,6 @@ function isValidRun(tiles) {
   
   const numbers = nonJokers.map(t => t.number).sort((a, b) => a - b);
   
-  // Verificar secuencia consecutiva
   for (let i = 1; i < numbers.length; i++) {
     if (numbers[i] !== numbers[i-1] + 1) return false;
   }
@@ -171,7 +169,6 @@ app.post('/api/rummy/games', async (req, res) => {
     const { playerName } = req.body;
     const gameId = generateRoomCode();
     
-    // Crear fichas y repartir
     const allTiles = shuffleArray(createTileSet());
     const player1Hand = allTiles.slice(0, 14);
     const player2Hand = allTiles.slice(14, 28);
@@ -189,13 +186,11 @@ app.post('/api/rummy/games', async (req, res) => {
       currentPlayer: playerName
     };
     
-    // Guardar en base de datos
     await pool.query(
       'INSERT INTO games (id, player1, current_player, game_state) VALUES ($1, $2, $3, $4)',
       [gameId, playerName, playerName, gameState]
     );
     
-    // Guardar en memoria
     games.set(gameId, {
       id: gameId,
       player1: playerName,
@@ -234,11 +229,9 @@ app.post('/api/rummy/games/:gameId/join', async (req, res) => {
       return res.status(400).json({ error: 'Ya estás en este juego' });
     }
     
-    // Actualizar juego
     game.player2 = playerName;
     game.status = 'playing';
     
-    // Actualizar base de datos
     await pool.query(
       'UPDATE games SET player2 = $1, status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
       [playerName, 'playing', gameId]
@@ -251,7 +244,6 @@ app.post('/api/rummy/games/:gameId/join', async (req, res) => {
       opponent: game.player1
     });
     
-    // Notificar a todos los sockets del juego
     io.to(gameId).emit('playerJoined', {
       player2: playerName,
       status: 'playing',
@@ -273,7 +265,6 @@ app.get('/api/rummy/health', (req, res) => {
 io.on('connection', (socket) => {
   console.log(`✅ Usuario conectado: ${socket.id}`);
   
-  // Unirse a sala de juego
   socket.on('joinGame', async (data) => {
     const { gameId, playerName } = data;
     
@@ -284,7 +275,6 @@ io.on('connection', (socket) => {
         return;
       }
       
-      // Verificar que el jugador puede unirse
       if (game.player1 !== playerName && game.player2 !== playerName) {
         socket.emit('error', { message: 'No estás autorizado para este juego' });
         return;
@@ -293,7 +283,6 @@ io.on('connection', (socket) => {
       socket.join(gameId);
       playerSockets.set(socket.id, { gameId, playerName });
       
-      // Enviar estado inicial
       socket.emit('gameState', {
         game,
         playerName,
@@ -308,7 +297,6 @@ io.on('connection', (socket) => {
     }
   });
   
-  // Hacer jugada
   socket.on('makeMove', async (data) => {
     const playerInfo = playerSockets.get(socket.id);
     if (!playerInfo) {
@@ -326,7 +314,6 @@ io.on('connection', (socket) => {
         return;
       }
       
-      // Verificar turno
       if (game.gameState.currentPlayer !== playerName) {
         socket.emit('error', { message: 'No es tu turno' });
         return;
@@ -350,26 +337,22 @@ io.on('connection', (socket) => {
       }
       
       if (moveResult.success) {
-        // Guardar jugada en BD
         await pool.query(
           'INSERT INTO game_moves (game_id, player, move_type, move_data) VALUES ($1, $2, $3, $4)',
           [gameId, playerName, moveType, moveData]
         );
         
-        // Actualizar estado en BD
         await pool.query(
           'UPDATE games SET game_state = $1, current_player = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
           [game.gameState, game.gameState.currentPlayer, gameId]
         );
         
-        // Emitir nuevo estado a todos los jugadores
         io.to(gameId).emit('gameUpdated', {
           gameState: game.gameState,
           move: { player: playerName, type: moveType, result: moveResult.message },
           timestamp: new Date().toISOString()
         });
         
-        // Enviar manos específicas a cada jugador
         const player1Socket = Array.from(io.sockets.sockets.values())
           .find(s => playerSockets.get(s.id)?.playerName === game.player1);
         const player2Socket = Array.from(io.sockets.sockets.values())
@@ -417,14 +400,12 @@ async function handleFormGroup(game, playerName, moveData) {
   const playerHand = isPlayer1 ? game.gameState.player1Hand : game.gameState.player2Hand;
   const playerInitialMeld = isPlayer1 ? game.gameState.player1InitialMeld : game.gameState.player2InitialMeld;
   
-  // Verificar que el jugador tiene todas las fichas
   for (let tile of selectedTiles) {
     if (!playerHand.find(t => t.id === tile.id)) {
       return { success: false, message: 'No puedes usar fichas que no tienes' };
     }
   }
   
-  // Verificar bajada inicial (30 puntos)
   if (!playerInitialMeld) {
     const groupValue = selectedTiles.reduce((sum, tile) => sum + calculateTileValue(tile), 0);
     if (groupValue < 30) {
@@ -432,10 +413,8 @@ async function handleFormGroup(game, playerName, moveData) {
     }
   }
   
-  // Aplicar jugada
   game.gameState.tableGroups.push(selectedTiles);
   
-  // Remover fichas de la mano del jugador
   if (isPlayer1) {
     game.gameState.player1Hand = game.gameState.player1Hand.filter(
       tile => !selectedTiles.some(st => st.id === tile.id)
@@ -448,7 +427,6 @@ async function handleFormGroup(game, playerName, moveData) {
     if (!playerInitialMeld) game.gameState.player2InitialMeld = true;
   }
   
-  // Verificar si el juego terminó
   const currentHand = isPlayer1 ? game.gameState.player1Hand : game.gameState.player2Hand;
   if (currentHand.length === 0) {
     await handleGameEnd(game, playerName);
@@ -476,7 +454,6 @@ async function handleDrawTile(game, playerName) {
 }
 
 async function handleEndTurn(game, playerName) {
-  // Cambiar turno
   game.gameState.currentPlayer = game.gameState.currentPlayer === game.player1 ? game.player2 : game.player1;
   
   return { success: true, message: `Turno terminado. Ahora juega ${game.gameState.currentPlayer}` };
@@ -495,7 +472,6 @@ async function handleGameEnd(game, winner) {
     game.gameState.player2Score += points;
   }
   
-  // Actualizar en BD
   await pool.query(
     'UPDATE games SET status = $1, game_state = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
     [game.status, game.gameState, game.id]
@@ -504,25 +480,21 @@ async function handleGameEnd(game, winner) {
 
 // =================== WHEEL FORTUNE GAME LOGIC ===================
 
-// Jugadores fijos para wheel-fortune
 const FIXED_PLAYERS_WHEEL = ['Peepo', 'Nachito', 'Fer'];
 
-// Valores de la ruleta
 const WHEEL_VALUES = [
   500, 800, 1000, 1500, 2000, 2500,
   'BANCARROTA', 'PIERDE_TURNO', 
   500, 1000, 1500, 2000
 ];
 
-// Variables para wheel-fortune
 const wheelGames = new Map();
 const wheelPlayerSockets = new Map();
 const wheelConnectedPlayers = new Map();
 
-// Función auxiliar para parsear JSON de manera segura
 function safeJsonParse(data, defaultValue = null) {
   if (!data) return defaultValue;
-  if (typeof data === 'object') return data; // Ya es un objeto
+  if (typeof data === 'object') return data;
   try {
     return JSON.parse(data);
   } catch (e) {
@@ -531,7 +503,6 @@ function safeJsonParse(data, defaultValue = null) {
   }
 }
 
-// Funciones auxiliares del wheel fortune
 function spinWheel() {
   return WHEEL_VALUES[Math.floor(Math.random() * WHEEL_VALUES.length)];
 }
@@ -582,50 +553,56 @@ async function saveWheelGameState(game) {
   );
 }
 
-// Banco de frases
 const WHEEL_PHRASES = {
-  'PELICULAS MARVEL': [
-    'IRON MAN TONY STARK GENIUS',
-    'SPIDER MAN PETER PARKER',
-    'THOR HAMMER MJOLNIR ASGARD',
-    'CAPTAIN AMERICA STEVE ROGERS',
-    'AVENGERS ENDGAME THANOS'
-  ],
   'BASKETBALL NBA': [
-    'LEBRON JAMES GOAT DEBATE',
-    'STEPHEN CURRY THREE POINTER',
-    'MICHAEL JORDAN BULLS',
-    'KOBE BRYANT MAMBA MENTALITY',
-    'NBA PLAYOFFS CHAMPIONSHIP'
+    'LEBRON JAMES LOS ANGELES LAKERS',
+    'STEPHEN CURRY GOLDEN STATE',
+    'NIKOLA JOKIC DENVER NUGGETS',
   ],
-  'GENERAL': [
-    'NINTENDO SWITCH MARIO',
-    'POKEMON PIKACHU TRAINER',
-    'MINECRAFT STEVE CREEPER',
-    'FORTNITE BATTLE ROYALE',
-    'AMONG US IMPOSTOR'
+  'VIAJANDO POR ESPAÑA': [
+    'LA SAGRADA FAMILIA BARCELONA',
+    'MUSEO DEL PRADO EN MADRID',
+    'LA ALHAMBRA DE GRANADA',
+  ],
+  'RELACIONADO CON MR BEAST': [
+    'MR BEAST REGALA DINERO',
+    'FEASTABLES CHOCOLATE BAR',
+    'ULTIMO EN SALIR GANA',
+  ],
+  'PELICULAS MARVEL': [
+    'SPIDERMAN NO WAY HOME',
+    'AVENGERS ENDGAME THANOS',
+    'GUARDIANES DE LA GALAXIA',
+  ],
+  'DC COMICS': [
+    'THE BATMAN ROBERT PATTINSON',
+    'JOKER ARTHUR FLECK',
+    'LIGA DE LA JUSTICIA SNYDER'
   ]
 };
 
-// --> NUEVO: Reemplazamos la función original con esta versión que llama a Gemini
 async function getRandomPhraseWheel(category = null) {
   const categories = Object.keys(WHEEL_PHRASES);
   const selectedCategory = category || categories[Math.floor(Math.random() * categories.length)];
 
-  const prompt = `Genera una frase para el juego 'Rueda de la Fortuna' con la categoría "${selectedCategory}". La frase debe tener entre 20 y 30 caracteres en total, incluyendo espacios. No incluyas la categoría en la respuesta. Responde únicamente con la frase en mayúsculas.`;
+  const prompt = `Genera una frase para el juego 'Rueda de la Fortuna' con la categoría "${selectedCategory}". La frase debe ser entendible por jóvenes de 13 a 15 años. Debe ser sobre algo de los últimos 15 años. La frase debe tener entre 20 y 30 caracteres en total (incluyendo espacios). Responde únicamente con la frase en mayúsculas.`;
 
   console.log(`Generando frase con Gemini para la categoría: ${selectedCategory}`);
 
   try {
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    let phrase = response.text().trim().toUpperCase().replace(/"/g, ''); // Limpiamos la respuesta
+    // --> CAMBIO: Usamos la nueva forma de llamar al modelo de Vertex AI
+    const request = {
+        contents: [{role: 'user', parts: [{text: prompt}]}],
+    };
+    const result = await model.generateContent(request);
+    const response = result.response;
+    
+    // --> CAMBIO: La forma de obtener el texto de la respuesta es diferente
+    let phrase = response.candidates[0].content.parts[0].text.trim().toUpperCase().replace(/"/g, '');
 
-    // Verificación de seguridad por si la IA da una respuesta extraña
-    if (phrase.length < 15 || phrase.length > 35) {
+    if (phrase.length < 20 || phrase.length > 30) {
         console.warn(`La frase generada por IA ('${phrase}') no cumple con la longitud. Usando una de respaldo.`);
-        // Si la frase es muy corta o larga, usa el respaldo
-        const backupPhrases = WHEEL_PHRASES[selectedCategory] || WHEEL_PHRASES['GENERAL'];
+        const backupPhrases = WHEEL_PHRASES[selectedCategory];
         phrase = backupPhrases[Math.floor(Math.random() * backupPhrases.length)];
     }
 
@@ -634,12 +611,8 @@ async function getRandomPhraseWheel(category = null) {
       category: selectedCategory
     };
   } catch (error) {
-    // Si CUALQUIER cosa en el bloque "try" falla (la API no responde, no hay conexión, etc.)
-    // el código salta inmediatamente a esta sección "catch".
     console.error("Error al llamar a la API de Gemini, usando frase de respaldo:", error);
-    
-    // Usa una frase del banco original que ya tienes
-    const backupPhrases = WHEEL_PHRASES[selectedCategory] || WHEEL_PHRASES['GENERAL'];
+    const backupPhrases = WHEEL_PHRASES[selectedCategory];
     const phrase = backupPhrases[Math.floor(Math.random() * backupPhrases.length)];
     
     return {
@@ -709,7 +682,6 @@ app.post('/api/wheel/games', async (req, res) => {
       initialMoney[player] = 0;
     });
     
-    // Guardar en base de datos
     await pool.query(
       `INSERT INTO wheel_games 
        (id, phrase, category, revealed_letters, current_player, player_money, consonants_used, vowels_used) 
@@ -752,10 +724,7 @@ app.get('/api/wheel/games/:gameId', async (req, res) => {
     }
     
     const gameData = result.rows[0];
-    console.log('Tipo de revealed_letters:', typeof gameData.revealed_letters);
-    console.log('Tipo de player_money:', typeof gameData.player_money);
     
-    // Usar la función segura para parsear JSONs
     const revealedLetters = safeJsonParse(gameData.revealed_letters, []);
     const playerMoney = safeJsonParse(gameData.player_money, {});
     const consonantsUsed = safeJsonParse(gameData.consonants_used, []);
@@ -800,7 +769,6 @@ app.get('/api/wheel/my-games/:player', async (req, res) => {
     console.log('Juegos encontrados para', player, ':', result.rows.length);
     
     const myGames = result.rows.map(row => {
-      // Usar la función segura para parsear player_money
       const playerMoneyObj = safeJsonParse(row.player_money, {});
       
       return {
@@ -827,7 +795,6 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
     const { gameId } = req.params;
     const { player, action, data } = req.body;
     
-    // Cargar juego desde BD
     const result = await pool.query('SELECT * FROM wheel_games WHERE id = $1', [gameId]);
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Juego no encontrado' });
@@ -835,7 +802,6 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
     
     const row = result.rows[0];
     
-    // Usar la función segura para todos los campos JSON
     const game = {
       id: row.id,
       phrase: row.phrase,
@@ -955,7 +921,7 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
       case 'solve_phrase':
         const solution = data.solution;
         const normalizedSolution = solution.toUpperCase().replace(/\s+/g, ' ').trim();
-        const normalizedPhrase = game.phrase.replace(/\s/g, ' ').trim();
+        const normalizedPhrase = game.phrase.replace(/\s+/g, ' ').trim();
         
         if (normalizedSolution === normalizedPhrase) {
           game.gameStatus = 'completed';
@@ -979,10 +945,8 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
     }
     
     if (gameResult.success) {
-      // Guardar en BD
       await saveWheelGameState(game);
       
-      // Guardar jugada
       await pool.query(
         'INSERT INTO wheel_moves (game_id, player, move_type, move_data) VALUES ($1, $2, $3, $4)',
         [gameId, player, action, JSON.stringify(data)]
@@ -1004,7 +968,6 @@ app.post('/api/wheel/games/:gameId/play', async (req, res) => {
 
 // =================== UPDATED MAIN ROUTES ===================
 
-// Health check general actualizado
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
@@ -1013,7 +976,6 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Ruta principal
 app.get('/', (req, res) => {
     res.send(`
       <h1>🎮 Family Games Backend</h1>
@@ -1031,14 +993,12 @@ app.get('/', (req, res) => {
     `);
   });
 
-// Servir frontend en producción
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
   });
 }
 
-// Inicializar servidor
 async function startServer() {
   await initDatabase();
   await initWheelDatabase();
