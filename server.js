@@ -5,7 +5,6 @@ const socketIo = require('socket.io');
 const cors = require('cors');
 const { Pool } = require('pg');
 const path = require('path');
-// --> CAMBIO: Importamos la librería de Vertex AI en lugar de la anterior
 const { VertexAI } = require('@google-cloud/vertexai');
 
 const app = express();
@@ -20,7 +19,6 @@ const io = socketIo(server, {
 // Configuración
 const PORT = process.env.PORT || 8080;
 
-// --> CAMBIO: Inicializamos el cliente de Vertex AI con tu proyecto y región
 const vertex_ai = new VertexAI({project: 'rummy-464118', location: 'us-central1'});
 const model = vertex_ai.getGenerativeModel({
     model: 'gemini-2.5-flash',
@@ -45,6 +43,32 @@ const TOTAL_TILES = 106;
 // Almacén de juegos en memoria (en producción usarías Redis)
 const games = new Map();
 const playerSockets = new Map();
+
+const RUMMY_BACKUP_TIPS = [
+    "Un comodín guardado es un 'te quiero' para el futuro de la partida.",
+    "¿Esa jugada fue tan brillante como los ojos de tu aloe?",
+    "Desde México hasta Chile, ¡que esta jugada cruce fronteras!",
+    "Recuerda, en el Rummy y en el amor, la paciencia es clave.",
+    "¡Qué movimiento! Digno de la jugadora favorita de Rummy."
+];
+
+async function getCouplesRummyMessage(playerName) {
+    const prompt = `Actúa como un comentarista divertido y un poco romántico para una partida de Rummy, el de fichas y números, no el de cartas entre una pareja, Olianna y Nacho. El jugador llamado '${playerName}' acaba de hacer su primera jugada importante ('bajar' sus fichas). Genera un mensaje corto y juguetón para celebrar este momento clave. Sé creativo y juguetón. Responde únicamente con el mensaje. Olianna actualmente está en Valdivia, Chile y Nacho en la Ciudad de México y por eso juegan este juego a distancia. El Rummy es el juego favorito de Olianna. Entre ellos tienen una forma juguetona de decirse "Mi aloe" porque un autocorrector puso mal "mi amor" una vez, asi que los puedes llamar "Aloes" ocasionalmente. Olianna es de Venezuela y Nacho de México.`;
+
+    try {
+        console.log(`Generando mensaje de Rummy para la primera jugada de ${playerName}...`);
+        const request = {
+            contents: [{role: 'user', parts: [{text: prompt}]}],
+        };
+        const result = await model.generateContent(request);
+        const response = result.response;
+        return response.candidates[0].content.parts[0].text.trim().replace(/"/g, '');
+    } catch (error) {
+        console.error("Error al llamar a Gemini para el consejo de Rummy, usando respaldo:", error);
+        return RUMMY_BACKUP_TIPS[Math.floor(Math.random() * RUMMY_BACKUP_TIPS.length)];
+    }
+}
+
 
 // Crear conjunto de fichas
 function createTileSet() {
@@ -166,7 +190,8 @@ async function initDatabase() {
 // Crear nuevo juego
 app.post('/api/rummy/games', async (req, res) => {
   try {
-    const { playerName } = req.body;
+    // --> RUMMY REGLAS: Aceptamos el puntaje inicial desde el frontend.
+    const { playerName, initialMeldPoints = 30 } = req.body;
     const gameId = generateRoomCode();
     
     const allTiles = shuffleArray(createTileSet());
@@ -183,7 +208,11 @@ app.post('/api/rummy/games', async (req, res) => {
       player2Score: 0,
       player1InitialMeld: false,
       player2InitialMeld: false,
-      currentPlayer: playerName
+      currentPlayer: playerName,
+      currentTip: "¡Que comience la partida de los Aloes!",
+      // --> RUMMY REGLAS: Añadimos los nuevos estados al juego.
+      initialMeldPoints: initialMeldPoints,
+      hasDrawnThisTurn: false
     };
     
     await pool.query(
@@ -408,9 +437,11 @@ async function handleFormGroup(game, playerName, moveData) {
   
   if (!playerInitialMeld) {
     const groupValue = selectedTiles.reduce((sum, tile) => sum + calculateTileValue(tile), 0);
-    if (groupValue < 30) {
-      return { success: false, message: 'Tu primera bajada debe sumar al menos 30 puntos' };
+    // --> RUMMY REGLAS: Usamos el puntaje configurable en lugar del 30 fijo.
+    if (groupValue < game.gameState.initialMeldPoints) {
+      return { success: false, message: `Tu primera bajada debe sumar al menos ${game.gameState.initialMeldPoints} puntos` };
     }
+    game.gameState.currentTip = await getCouplesRummyMessage(playerName);
   }
   
   game.gameState.tableGroups.push(selectedTiles);
@@ -437,6 +468,11 @@ async function handleFormGroup(game, playerName, moveData) {
 }
 
 async function handleDrawTile(game, playerName) {
+  // --> RUMMY REGLAS: Verificamos si el jugador ya tomó una ficha en este turno.
+  if (game.gameState.hasDrawnThisTurn) {
+    return { success: false, message: 'Ya tomaste una ficha en este turno.' };
+  }
+  
   if (game.gameState.tiles.length === 0) {
     return { success: false, message: 'No hay más fichas en el mazo' };
   }
@@ -450,11 +486,16 @@ async function handleDrawTile(game, playerName) {
     game.gameState.player2Hand.push(newTile);
   }
   
+  // --> RUMMY REGLAS: Marcamos que el jugador ya tomó su ficha.
+  game.gameState.hasDrawnThisTurn = true;
+  
   return { success: true, message: `${playerName} tomó una ficha del mazo` };
 }
 
 async function handleEndTurn(game, playerName) {
   game.gameState.currentPlayer = game.gameState.currentPlayer === game.player1 ? game.player2 : game.player1;
+  // --> RUMMY REGLAS: Reseteamos el contador de tomar ficha para el siguiente turno.
+  game.gameState.hasDrawnThisTurn = false;
   
   return { success: true, message: `Turno terminado. Ahora juega ${game.gameState.currentPlayer}` };
 }
@@ -590,14 +631,12 @@ async function getRandomPhraseWheel(category = null) {
   console.log(`Generando frase con Gemini para la categoría: ${selectedCategory}`);
 
   try {
-    // --> CAMBIO: Usamos la nueva forma de llamar al modelo de Vertex AI
     const request = {
         contents: [{role: 'user', parts: [{text: prompt}]}],
     };
     const result = await model.generateContent(request);
     const response = result.response;
     
-    // --> CAMBIO: La forma de obtener el texto de la respuesta es diferente
     let phrase = response.candidates[0].content.parts[0].text.trim().toUpperCase().replace(/"/g, '');
 
     if (phrase.length < 20 || phrase.length > 30) {
