@@ -9,9 +9,10 @@ const model = vertex_ai.getGenerativeModel({
 
 const FIXED_PLAYERS_WHEEL = ['Peepo', 'Nachito', 'Fer'];
 
+// --> CAMBIO: Texto de la ruleta actualizado
 const WHEEL_VALUES = [
   500, 800, 1000, 1500, 2000, 2500,
-  'BANCARROTA', 'PIERDE_TURNO', 
+  'ADIOS 1/2 $$', 'PIERDE_TURNO', 
   500, 1000, 1500, 2000
 ];
 
@@ -127,10 +128,8 @@ async function getRandomPhraseWheel(category = null) {
 }
 
 
-// La función principal que exportaremos.
 module.exports = function(app, pool) {
 
-    // Rutas de la API para Wheel of Fortune
     app.get('/api/wheel/health', (req, res) => {
         res.json({ status: 'OK', game: 'Wheel Fortune', timestamp: new Date().toISOString() });
     });
@@ -231,7 +230,6 @@ module.exports = function(app, pool) {
             
             let gameResult = { success: false, message: '' };
             
-            // --> CORRECCIÓN: Se restaura la lógica completa de las jugadas.
             switch (action) {
               case 'spin':
                 const spinResult = spinWheel();
@@ -241,13 +239,13 @@ module.exports = function(app, pool) {
               case 'guess_consonant':
                 const { letter, wheelValue } = data;
                 if (typeof wheelValue !== 'number') {
-                    if (wheelValue === 'BANCARROTA') {
-                        game.playerMoney[player] = 0;
+                    if (wheelValue === 'ADIOS 1/2 $$') {
+                        game.playerMoney[player] = Math.floor(game.playerMoney[player] / 2);
                         game.currentPlayer = getNextPlayerWheel(player);
-                        gameResult = { success: true, message: `${player} perdió todo - BANCARROTA!` };
+                        gameResult = { success: true, message: `¡Adiós a la mitad de tu dinero, ${player}!` };
                     } else if (wheelValue === 'PIERDE_TURNO') {
                         game.currentPlayer = getNextPlayerWheel(player);
-                        gameResult = { success: true, message: `${player} pierde el turno` };
+                        gameResult = { success: true, message: `${player} pierde el turno.` };
                     }
                 } else {
                     if (game.consonantsUsed.includes(letter.toUpperCase())) {
@@ -263,11 +261,11 @@ module.exports = function(app, pool) {
                                 game.gameStatus = 'completed';
                                 gameResult = { success: true, message: `¡${player} completó la frase y ganó ${game.playerMoney[player]}!`, gameComplete: true };
                             } else {
-                                gameResult = { success: true, message: `¡Correcto! ${letterCheck.count} letra(s) '${letter}' - ${earnings}` };
+                                gameResult = { success: true, message: `¡Correcto! ${letterCheck.count} letra(s) '${letter}' por $${earnings}` };
                             }
                         } else {
                             game.currentPlayer = getNextPlayerWheel(player);
-                            gameResult = { success: true, message: `No hay letra '${letter}' - turno de ${game.currentPlayer}` };
+                            gameResult = { success: true, message: `No hay letra '${letter}'. Turno de ${game.currentPlayer}` };
                         }
                     }
                 }
@@ -293,7 +291,7 @@ module.exports = function(app, pool) {
                         }
                     } else {
                         game.currentPlayer = getNextPlayerWheel(player);
-                        gameResult = { success: true, message: `No hay vocal '${vowel}' - turno de ${game.currentPlayer}` };
+                        gameResult = { success: true, message: `No hay vocal '${vowel}'. Turno de ${game.currentPlayer}` };
                     }
                 }
                 break;
@@ -308,7 +306,7 @@ module.exports = function(app, pool) {
                     gameResult = { success: true, message: `¡${player} resolvió la frase y ganó ${game.playerMoney[player]}!`, gameComplete: true };
                 } else {
                     game.currentPlayer = getNextPlayerWheel(player);
-                    gameResult = { success: true, message: `Solución incorrecta - turno de ${game.currentPlayer}` };
+                    gameResult = { success: true, message: `Solución incorrecta. Turno de ${game.currentPlayer}` };
                 }
                 break;
 
