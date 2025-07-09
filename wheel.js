@@ -7,8 +7,6 @@ const model = vertex_ai.getGenerativeModel({
     model: 'gemini-2.5-flash',
 });
 
-// --> CORRECCIÓN: Se restauran las constantes y funciones auxiliares que faltaban.
-
 const FIXED_PLAYERS_WHEEL = ['Peepo', 'Nachito', 'Fer'];
 
 const WHEEL_VALUES = [
@@ -233,12 +231,89 @@ module.exports = function(app, pool) {
             
             let gameResult = { success: false, message: '' };
             
+            // --> CORRECCIÓN: Se restaura la lógica completa de las jugadas.
             switch (action) {
               case 'spin':
                 const spinResult = spinWheel();
                 gameResult = { success: true, message: `${player} giró: ${spinResult}`, wheelValue: spinResult };
                 break;
-              // ... resto de la lógica de 'guess_consonant', 'buy_vowel', 'solve_phrase' ...
+              
+              case 'guess_consonant':
+                const { letter, wheelValue } = data;
+                if (typeof wheelValue !== 'number') {
+                    if (wheelValue === 'BANCARROTA') {
+                        game.playerMoney[player] = 0;
+                        game.currentPlayer = getNextPlayerWheel(player);
+                        gameResult = { success: true, message: `${player} perdió todo - BANCARROTA!` };
+                    } else if (wheelValue === 'PIERDE_TURNO') {
+                        game.currentPlayer = getNextPlayerWheel(player);
+                        gameResult = { success: true, message: `${player} pierde el turno` };
+                    }
+                } else {
+                    if (game.consonantsUsed.includes(letter.toUpperCase())) {
+                        gameResult = { success: false, message: 'Esa consonante ya fue usada' };
+                    } else {
+                        const letterCheck = checkLetter(game.phrase, letter);
+                        game.consonantsUsed.push(letter.toUpperCase());
+                        if (letterCheck.found) {
+                            game.revealedLetters.push(letter.toUpperCase());
+                            const earnings = wheelValue * letterCheck.count;
+                            game.playerMoney[player] += earnings;
+                            if (isPhraseComplete(game.phrase, game.revealedLetters)) {
+                                game.gameStatus = 'completed';
+                                gameResult = { success: true, message: `¡${player} completó la frase y ganó ${game.playerMoney[player]}!`, gameComplete: true };
+                            } else {
+                                gameResult = { success: true, message: `¡Correcto! ${letterCheck.count} letra(s) '${letter}' - ${earnings}` };
+                            }
+                        } else {
+                            game.currentPlayer = getNextPlayerWheel(player);
+                            gameResult = { success: true, message: `No hay letra '${letter}' - turno de ${game.currentPlayer}` };
+                        }
+                    }
+                }
+                break;
+
+              case 'buy_vowel':
+                const vowel = data.letter;
+                if (game.playerMoney[player] < 250) {
+                    gameResult = { success: false, message: 'No tienes suficiente dinero para comprar una vocal ($250)' };
+                } else if (game.vowelsUsed.includes(vowel.toUpperCase())) {
+                    gameResult = { success: false, message: 'Esa vocal ya fue comprada' };
+                } else {
+                    game.vowelsUsed.push(vowel.toUpperCase());
+                    game.playerMoney[player] -= 250;
+                    const letterCheck = checkLetter(game.phrase, vowel);
+                    if (letterCheck.found) {
+                        game.revealedLetters.push(vowel.toUpperCase());
+                        if (isPhraseComplete(game.phrase, game.revealedLetters)) {
+                            game.gameStatus = 'completed';
+                            gameResult = { success: true, message: `¡${player} completó la frase con '${vowel}' y ganó ${game.playerMoney[player]}!`, gameComplete: true };
+                        } else {
+                            gameResult = { success: true, message: `¡Correcto! ${letterCheck.count} vocal(es) '${vowel}' por $250` };
+                        }
+                    } else {
+                        game.currentPlayer = getNextPlayerWheel(player);
+                        gameResult = { success: true, message: `No hay vocal '${vowel}' - turno de ${game.currentPlayer}` };
+                    }
+                }
+                break;
+
+              case 'solve_phrase':
+                const solution = data.solution;
+                const normalizedSolution = solution.toUpperCase().replace(/\s+/g, ' ').trim();
+                const normalizedPhrase = game.phrase.replace(/\s+/g, ' ').trim();
+                if (normalizedSolution === normalizedPhrase) {
+                    game.gameStatus = 'completed';
+                    game.revealedLetters = [...new Set(game.phrase.replace(/\s/g, '').split(''))];
+                    gameResult = { success: true, message: `¡${player} resolvió la frase y ganó ${game.playerMoney[player]}!`, gameComplete: true };
+                } else {
+                    game.currentPlayer = getNextPlayerWheel(player);
+                    gameResult = { success: true, message: `Solución incorrecta - turno de ${game.currentPlayer}` };
+                }
+                break;
+
+              default:
+                return res.status(400).json({ error: 'Acción inválida' });
             }
             
             if (gameResult.success) {

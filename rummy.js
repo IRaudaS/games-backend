@@ -28,6 +28,8 @@ async function getCouplesRummyMessage(playerName) {
 }
 
 const COLORS = ['rojo', 'azul', 'verde', 'naranja'];
+const TOTAL_TILES = 106;
+
 function createTileSet() {
   const tiles = [];
   let id = 0;
@@ -42,6 +44,7 @@ function createTileSet() {
   tiles.push({ id: id++, number: '★', color: 'joker', isJoker: true });
   return tiles;
 }
+
 function shuffleArray(array) {
   const shuffled = [...array];
   for (let i = shuffled.length - 1; i > 0; i--) {
@@ -50,7 +53,11 @@ function shuffleArray(array) {
   }
   return shuffled;
 }
-function generateRoomCode() { return 'RUMMY-' + Math.random().toString(36).substr(2, 6).toUpperCase(); }
+
+function generateRoomCode() {
+  return 'RUMMY-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+}
+
 function isValidRun(tiles) {
   if (tiles.length < 3) return false;
   const nonJokers = tiles.filter(t => !t.isJoker);
@@ -63,6 +70,7 @@ function isValidRun(tiles) {
   }
   return true;
 }
+
 function isValidGroup(tiles) {
   if (tiles.length < 3) return false;
   const nonJokers = tiles.filter(t => !t.isJoker);
@@ -72,60 +80,19 @@ function isValidGroup(tiles) {
   const colors = new Set(nonJokers.map(t => t.color));
   return colors.size === nonJokers.length;
 }
-function isValidMeld(tiles) { return isValidRun(tiles) || isValidGroup(tiles); }
-function calculateTileValue(tile) { return tile.isJoker ? 0 : tile.number; }
+
+function isValidMeld(tiles) {
+  return isValidRun(tiles) || isValidGroup(tiles);
+}
+
+function calculateTileValue(tile) {
+  return tile.isJoker ? 0 : tile.number;
+}
 
 module.exports = function(app, io, pool) {
     const games = new Map();
     const playerSockets = new Map();
 
-    async function handleFormGroup(game, playerName, moveData) {
-        const { selectedTiles } = moveData;
-        if (!selectedTiles || selectedTiles.length < 3) return { success: false, message: 'Necesitas al menos 3 fichas para formar un grupo' };
-        if (!isValidMeld(selectedTiles)) return { success: false, message: 'Las fichas seleccionadas no forman un grupo válido' };
-        const isPlayer1 = game.player1 === playerName;
-        const playerHand = isPlayer1 ? game.gameState.player1Hand : game.gameState.player2Hand;
-        const playerInitialMeld = isPlayer1 ? game.gameState.player1InitialMeld : game.gameState.player2InitialMeld;
-        for (let tile of selectedTiles) {
-            if (!playerHand.find(t => t.id === tile.id)) return { success: false, message: 'No puedes usar fichas que no tienes' };
-        }
-        if (!playerInitialMeld) {
-            const groupValue = selectedTiles.reduce((sum, tile) => sum + calculateTileValue(tile), 0);
-            if (groupValue < game.gameState.initialMeldPoints) {
-                return { success: false, message: `Tu primera bajada debe sumar al menos ${game.gameState.initialMeldPoints} puntos` };
-            }
-            game.gameState.currentTip = await getCouplesRummyMessage(playerName);
-        }
-        game.gameState.tableGroups.push(selectedTiles);
-        if (isPlayer1) {
-            game.gameState.player1Hand = game.gameState.player1Hand.filter(tile => !selectedTiles.some(st => st.id === tile.id));
-            if (!playerInitialMeld) game.gameState.player1InitialMeld = true;
-        } else {
-            game.gameState.player2Hand = game.gameState.player2Hand.filter(tile => !selectedTiles.some(st => st.id === tile.id));
-            if (!playerInitialMeld) game.gameState.player2InitialMeld = true;
-        }
-        const currentHand = isPlayer1 ? game.gameState.player1Hand : game.gameState.player2Hand;
-        if (currentHand.length === 0) {
-            await handleGameEnd(game, playerName);
-            return { success: true, message: `¡${playerName} ha ganado la partida!` };
-        }
-        return { success: true, message: `Grupo válido formado por ${playerName}` };
-    }
-    async function handleDrawTile(game, playerName) {
-        if (game.gameState.hasDrawnThisTurn) return { success: false, message: 'Ya tomaste una ficha en este turno.' };
-        if (game.gameState.tiles.length === 0) return { success: false, message: 'No hay más fichas en el mazo' };
-        const newTile = game.gameState.tiles.shift();
-        const isPlayer1 = game.player1 === playerName;
-        if (isPlayer1) game.gameState.player1Hand.push(newTile);
-        else game.gameState.player2Hand.push(newTile);
-        game.gameState.hasDrawnThisTurn = true;
-        return { success: true, message: `${playerName} tomó una ficha del mazo` };
-    }
-    async function handleEndTurn(game, playerName) {
-        game.gameState.currentPlayer = game.gameState.currentPlayer === game.player1 ? game.player2 : game.player1;
-        game.gameState.hasDrawnThisTurn = false;
-        return { success: true, message: `Turno terminado. Ahora juega ${game.gameState.currentPlayer}` };
-    }
     async function handleGameEnd(game, winner) {
         game.status = 'finished';
         const isPlayer1Winner = game.player1 === winner;
@@ -134,6 +101,65 @@ module.exports = function(app, io, pool) {
         if (isPlayer1Winner) game.gameState.player1Score += points;
         else game.gameState.player2Score += points;
         await pool.query('UPDATE games SET status = $1, game_state = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3', [game.status, game.gameState, game.id]);
+    }
+
+    async function handleFormGroup(game, playerName, moveData) {
+        const { selectedTiles } = moveData;
+        if (!selectedTiles || selectedTiles.length < 3) return { success: false, message: 'Necesitas al menos 3 fichas para formar un grupo' };
+        if (!isValidMeld(selectedTiles)) return { success: false, message: 'Las fichas seleccionadas no forman un grupo válido' };
+        
+        const isPlayer1 = game.player1 === playerName;
+        const playerHand = isPlayer1 ? game.gameState.player1Hand : game.gameState.player2Hand;
+        const playerInitialMeld = isPlayer1 ? game.gameState.player1InitialMeld : game.gameState.player2InitialMeld;
+
+        for (let tile of selectedTiles) {
+            if (!playerHand.find(t => t.id === tile.id)) return { success: false, message: 'No puedes usar fichas que no tienes' };
+        }
+
+        if (!playerInitialMeld) {
+            const groupValue = selectedTiles.reduce((sum, tile) => sum + calculateTileValue(tile), 0);
+            if (groupValue < game.gameState.initialMeldPoints) {
+                return { success: false, message: `Tu primera bajada debe sumar al menos ${game.gameState.initialMeldPoints} puntos` };
+            }
+            game.gameState.currentTip = await getCouplesRummyMessage(playerName);
+        }
+        
+        game.gameState.tableGroups.push(selectedTiles);
+        
+        if (isPlayer1) {
+            game.gameState.player1Hand = game.gameState.player1Hand.filter(tile => !selectedTiles.some(st => st.id === tile.id));
+            if (!playerInitialMeld) game.gameState.player1InitialMeld = true;
+        } else {
+            game.gameState.player2Hand = game.gameState.player2Hand.filter(tile => !selectedTiles.some(st => st.id === tile.id));
+            if (!playerInitialMeld) game.gameState.player2InitialMeld = true;
+        }
+        
+        const currentHand = isPlayer1 ? game.gameState.player1Hand : game.gameState.player2Hand;
+        if (currentHand.length === 0) {
+            await handleGameEnd(game, playerName);
+            return { success: true, message: `¡${playerName} ha ganado la partida!` };
+        }
+        
+        return { success: true, message: `Grupo válido formado por ${playerName}` };
+    }
+
+    async function handleDrawTile(game, playerName) {
+        if (game.gameState.hasDrawnThisTurn) return { success: false, message: 'Ya tomaste una ficha en este turno.' };
+        if (game.gameState.tiles.length === 0) return { success: false, message: 'No hay más fichas en el mazo' };
+        
+        const newTile = game.gameState.tiles.shift();
+        const isPlayer1 = game.player1 === playerName;
+        if (isPlayer1) game.gameState.player1Hand.push(newTile);
+        else game.gameState.player2Hand.push(newTile);
+        
+        game.gameState.hasDrawnThisTurn = true;
+        return { success: true, message: `${playerName} tomó una ficha del mazo` };
+    }
+
+    async function handleEndTurn(game, playerName) {
+        game.gameState.currentPlayer = game.gameState.currentPlayer === game.player1 ? game.player2 : game.player1;
+        game.gameState.hasDrawnThisTurn = false;
+        return { success: true, message: `Turno terminado. Ahora juega ${game.gameState.currentPlayer}` };
     }
 
     app.post('/api/rummy/games', async (req, res) => {
@@ -152,8 +178,9 @@ module.exports = function(app, io, pool) {
                 player2InitialMeld: false,
                 currentPlayer: playerName,
                 currentTip: "¡Que comience la partida de los Aloes!",
-                initialMeldPoints: initialMeldPoints,
-                hasDrawnThisTurn: false
+                initialMeldPoints: parseInt(initialMeldPoints, 10),
+                hasDrawnThisTurn: false,
+                isProcessing: false,
             };
             await pool.query('INSERT INTO games (id, player1, current_player, game_state) VALUES ($1, $2, $3, $4)', [gameId, playerName, playerName, gameState]);
             games.set(gameId, { id: gameId, player1: playerName, player2: null, status: 'waiting', gameState });
@@ -172,6 +199,7 @@ module.exports = function(app, io, pool) {
             if (!game) return res.status(404).json({ error: 'Juego no encontrado' });
             if (game.player2) return res.status(400).json({ error: 'Juego lleno' });
             if (game.player1 === playerName) return res.status(400).json({ error: 'Ya estás en este juego' });
+            
             game.player2 = playerName;
             game.status = 'playing';
             await pool.query('UPDATE games SET player2 = $1, status = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3', [playerName, 'playing', gameId]);
@@ -194,6 +222,7 @@ module.exports = function(app, io, pool) {
                 const game = games.get(gameId);
                 if (!game) return socket.emit('error', { message: 'Juego no encontrado' });
                 if (game.player1 !== playerName && game.player2 !== playerName) return socket.emit('error', { message: 'No estás autorizado para este juego' });
+                
                 socket.join(gameId);
                 playerSockets.set(socket.id, { gameId, playerName });
                 socket.emit('gameState', { game, playerName, yourHand: playerName === game.player1 ? game.gameState.player1Hand : game.gameState.player2Hand });
@@ -203,26 +232,37 @@ module.exports = function(app, io, pool) {
                 socket.emit('error', { message: 'Error uniéndose al juego' });
             }
         });
+
         socket.on('makeMove', async (data) => {
             const playerInfo = playerSockets.get(socket.id);
             if (!playerInfo) return socket.emit('error', { message: 'No estás en un juego' });
+            
             const { gameId, playerName } = playerInfo;
-            const { moveType, moveData } = data;
+            const game = games.get(gameId);
+
+            if (game.gameState.isProcessing) {
+                return socket.emit('moveError', { message: 'Espera, se está procesando otra jugada.' });
+            }
+
+            game.gameState.isProcessing = true;
             try {
-                const game = games.get(gameId);
-                if (!game || game.status !== 'playing') return socket.emit('error', { message: 'Juego no disponible' });
-                if (game.gameState.currentPlayer !== playerName) return socket.emit('error', { message: 'No es tu turno' });
+                const { moveType, moveData } = data;
+                if (!game || game.status !== 'playing') throw new Error('Juego no disponible');
+                if (game.gameState.currentPlayer !== playerName) throw new Error('No es tu turno');
+                
                 let moveResult = null;
                 switch (moveType) {
                     case 'formGroup': moveResult = await handleFormGroup(game, playerName, moveData); break;
                     case 'drawTile': moveResult = await handleDrawTile(game, playerName); break;
                     case 'endTurn': moveResult = await handleEndTurn(game, playerName); break;
-                    default: return socket.emit('error', { message: 'Tipo de jugada inválido' });
+                    default: throw new Error('Tipo de jugada inválido');
                 }
+                
                 if (moveResult.success) {
                     await pool.query('INSERT INTO game_moves (game_id, player, move_type, move_data) VALUES ($1, $2, $3, $4)', [gameId, playerName, moveType, moveData]);
                     await pool.query('UPDATE games SET game_state = $1, current_player = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3', [game.gameState, game.gameState.currentPlayer, gameId]);
                     io.to(gameId).emit('gameUpdated', { gameState: game.gameState, move: { player: playerName, type: moveType, result: moveResult.message }, timestamp: new Date().toISOString() });
+                    
                     const player1Socket = Array.from(io.sockets.sockets.values()).find(s => playerSockets.get(s.id)?.playerName === game.player1);
                     const player2Socket = Array.from(io.sockets.sockets.values()).find(s => playerSockets.get(s.id)?.playerName === game.player2);
                     if (player1Socket) player1Socket.emit('yourHand', game.gameState.player1Hand);
@@ -232,9 +272,12 @@ module.exports = function(app, io, pool) {
                 }
             } catch (error) {
                 console.error('Error en makeMove:', error);
-                socket.emit('error', { message: 'Error procesando jugada' });
+                socket.emit('error', { message: error.message || 'Error procesando jugada' });
+            } finally {
+                if (game) game.gameState.isProcessing = false;
             }
         });
+
         socket.on('disconnect', () => {
             const playerInfo = playerSockets.get(socket.id);
             if (playerInfo) {
