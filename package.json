@@ -9,11 +9,11 @@
     "test": "echo \"No tests yet\" && exit 0"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "socket.io": "^4.7.4",
+    "@google-cloud/vertexai": "^1.10.0",
     "cors": "^2.8.5",
+    "express": "^4.18.2",
     "pg": "^8.11.3",
-    "@google/generative-ai": "^0.21.0"
+    "socket.io": "^4.7.4"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
@@ -23,7 +23,7 @@
   },
   "keywords": [
     "rummy",
-    "wheel-of-fortune", 
+    "wheel-of-fortune",
     "family-games",
     "nodejs",
     "socketio",
